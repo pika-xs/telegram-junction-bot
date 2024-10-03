@@ -1,5 +1,7 @@
-from telegram import Update, ParseMode
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackContext
+from telegram.ext.filters import Text
+from telegram.constants import ParseMode  # Import ParseMode from the new location
 from config import BOT_TOKEN, ADMIN_USER_ID, tasks
 from utils.message_forwarder import forward_message
 from utils.task_manager import manage_task
