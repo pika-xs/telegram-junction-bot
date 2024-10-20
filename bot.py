@@ -1,85 +1,95 @@
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackContext
-from telegram.ext.filters import Text
-from telegram.constants import ParseMode  # Import ParseMode from the new location
-from config import BOT_TOKEN, ADMIN_USER_ID, tasks
-from utils.message_forwarder import forward_message
-from utils.task_manager import manage_task
+from pyrogram import Client, filters
+from pyrogram.types import Message
+import json
+import os
 
-def start(update: Update, context: CallbackContext):
-    """Display start message and available commands."""
-    update.message.reply_text(
-        "/create_task <task_name> - Create a new task\n"
-        "/set_source <task_name> <channel_id> - Set source channel\n"
-        "/set_target <task_name> <channel_id> - Set target channel\n"
-        "/set_caption <task_name> <caption> - Set caption with hyperlink\n"
-        "/start_task <task_name> - Start the task\n"
-        "/stop_task <task_name> - Stop the task\n"
-        "/status <task_name> - Check task status"
-    )
+# Replace with your own details
+api_id = '25236906'
+api_hash = '2c7b117fb4fb4d487df4e589da1d4c5f'
+bot_token = '7995816359:AAESeFlM6x7wiFh5Lhv_iua8v7-hOs1ihqc'
 
-def create_task(update: Update, context: CallbackContext):
-    """Create a new task."""
-    if len(context.args) < 1:
-        update.message.reply_text("Please provide a task name.")
+# File to store tasks
+TASKS_FILE = 'tasks.json'
+
+# Create a new Pyrogram client
+app = Client('junction_bot', api_id=api_id, api_hash=api_hash, bot_token=bot_token)
+
+# Load tasks from file
+def load_tasks():
+    if os.path.exists(TASKS_FILE):
+        with open(TASKS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+# Save tasks to file
+def save_tasks(tasks):
+    with open(TASKS_FILE, 'w') as f:
+        json.dump(tasks, f)
+
+# Initialize tasks
+tasks = load_tasks()
+
+# Add new task command
+@app.on_message(filters.command('add_task') & filters.private)
+async def add_task(client, message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.reply("Usage: /add_task source_channel_id target_channel_id")
+            return
+
+        source_channel = parts[1]
+        target_channel = parts[2]
+
+        # Add the task
+        tasks[source_channel] = target_channel
+        save_tasks(tasks)
+        await message.reply(f"Task added: {source_channel} -> {target_channel}")
+    except Exception as e:
+        await message.reply(f"Error adding task: {e}")
+
+# List all active tasks command
+@app.on_message(filters.command('list_tasks') & filters.private)
+async def list_tasks(client, message: Message):
+    if not tasks:
+        await message.reply("No active tasks.")
         return
 
-    task_name = context.args[0]
-    if task_name in tasks:
-        update.message.reply_text("Task name already exists.")
-        return
-    
-    tasks[task_name] = {"source": None, "target": None, "caption": None, "active": False}
-    update.message.reply_text(f"Task '{task_name}' created successfully!")
+    task_list = "\n".join([f"{src} -> {dst}" for src, dst in tasks.items()])
+    await message.reply(f"Active tasks:\n{task_list}")
 
-def set_source(update: Update, context: CallbackContext):
-    """Set source channel for a task."""
-    manage_task(update, context, "source")
+# Delete task command
+@app.on_message(filters.command('delete_task') & filters.private)
+async def delete_task(client, message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.reply("Usage: /delete_task source_channel_id")
+            return
 
-def set_target(update: Update, context: CallbackContext):
-    """Set target channel for a task."""
-    manage_task(update, context, "target")
+        source_channel = parts[1]
 
-def set_caption(update: Update, context: CallbackContext):
-    """Set custom caption with hyperlink for a task."""
-    manage_task(update, context, "caption")
+        if source_channel in tasks:
+            del tasks[source_channel]
+            save_tasks(tasks)
+            await message.reply(f"Task for {source_channel} deleted.")
+        else:
+            await message.reply(f"No task found for {source_channel}.")
+    except Exception as e:
+        await message.reply(f"Error deleting task: {e}")
 
-def start_task(update: Update, context: CallbackContext):
-    """Start the task to forward messages."""
-    task_name = context.args[0]
-    if tasks.get(task_name, {}).get("source") and tasks[task_name]["target"]:
-        tasks[task_name]["active"] = True
-        update.message.reply_text(f"Task '{task_name}' started successfully!")
-    else:
-        update.message.reply_text(f"Please set source and target for task '{task_name}'.")
+# Monitor channels for new files and forward them
+@app.on_message(filters.document | filters.video | filters.photo)
+async def forward_files(client, message: Message):
+    source_channel = str(message.chat.id)
+    if source_channel in tasks:
+        target_channel = tasks[source_channel]
+        try:
+            await message.copy(chat_id=target_channel)
+            print(f"File from {source_channel} copied to {target_channel}.")
+        except Exception as e:
+            print(f"Error copying file: {e}")
 
-def stop_task(update: Update, context: CallbackContext):
-    """Stop an active task."""
-    task_name = context.args[0]
-    tasks[task_name]["active"] = False
-    update.message.reply_text(f"Task '{task_name}' stopped.")
-
-def forward_messages(update: Update, context: CallbackContext):
-    """Forward messages from source to target channels if task is active."""
-    for task_name, settings in tasks.items():
-        if settings["active"]:
-            forward_message(update, task_name, settings)
-
-def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("create_task", create_task))
-    dp.add_handler(CommandHandler("set_source", set_source, pass_args=True))
-    dp.add_handler(CommandHandler("set_target", set_target, pass_args=True))
-    dp.add_handler(CommandHandler("set_caption", set_caption, pass_args=True))
-    dp.add_handler(CommandHandler("start_task", start_task, pass_args=True))
-    dp.add_handler(CommandHandler("stop_task", stop_task, pass_args=True))
-    dp.add_handler(MessageHandler(Filters.text, forward_messages))
-
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    print("Bot is running...")
+    app.run()
